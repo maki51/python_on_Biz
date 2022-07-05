@@ -1,0 +1,250 @@
+
+# 引数１：ZIPファイル
+
+print ('\n\n\n\n\n\n')
+
+
+import sys
+import re
+import os
+import shutil 
+import matplotlib.pyplot as plt
+import matplotlib.dates as pltdates
+import datetime 
+
+
+SUMMARY_OUTFILE="hinemos-summary-"
+
+
+# y_axis_flagのデフォルト値
+y_axis_flag ='percent'
+
+
+
+# sys.argv属性にはpythonコマンドで実行するスクリプトに
+# 与えられたコマンドライン引数が渡される（スクリプトファイル名を含む）
+#print('sys.argv:', sys.argv)
+
+script_file_fullpath = sys.argv[0]
+print('script file name:', script_file_fullpath)
+
+
+if len(sys.argv)!=4:
+    print ('引数が足りません')
+    print('Usage:python ffifa-monthlyreport1.py [ZIPファイル] [月(3文字英字)] [年(4桁数値)]')    
+    sys.exit()
+
+# コマンドライン引数からZIPファイルフルパスとファイル名の取得
+zip_file_fullpath = sys.argv[1]
+zip_file_name = os.path.basename(zip_file_fullpath)
+zip_file_path = os.path.dirname(zip_file_fullpath)
+print('ZIP FILE NAME:', zip_file_name )
+print('ZIP FILE PATH:', zip_file_path )
+
+
+# コマンドライン引数から対象月（英字3文字）と年号（4桁数字）の取得
+criteria_month = sys.argv[2]
+criteria_year =  sys.argv[3]
+
+
+m = re.search(r'(.{5,8})_(?P<type>(.+))_(.+)\.zip$',zip_file_name)
+
+
+
+if m :
+    typ =m.group('type')
+    print (typ)
+
+    if typ=='CPU' : y_axis_flag ='percent'
+    if typ=='MEM' : y_axis_flag ='percent'
+    if typ=='Bytes_Rx' : y_axis_flag ='bps'
+    if typ=='Bytes_Tx' : y_axis_flag ='bps'
+    
+
+if (y_axis_flag =='percent'):
+    y_axis_max=100
+    y_axis_label='Usage (Percent)'
+    y_axi_cri = 90.0
+    y_axi_wrn = 80.0
+    #y_axi_cri = 20.0
+    #y_axi_wrn = 5.0
+    y_val_mul = 1.0
+    x_label_unit='%'
+
+if (y_axis_flag =='bps'):
+    y_axis_max=1000
+    y_axis_label='Traffic (Mbits/sec)'
+    y_axi_cri = y_axis_max*0.65
+    y_axi_wrn = y_axis_max*0.35
+    #y_axi_cri = y_axis_max*0.2
+    #y_axi_wrn = y_axis_max*0.15
+    
+    y_val_mul = float(8.0/1024/1024)
+    x_label_unit='Mbps'
+
+#sys.exit()
+
+# ZIPファイルの解凍
+log_type=m.group(3)
+unzip_dir = os.path.join (zip_file_path , log_type)
+if not os.path.exists(unzip_dir):
+    os.makedirs (unzip_dir)
+
+shutil.unpack_archive(zip_file_fullpath, extract_dir=unzip_dir)
+
+#################################################################
+
+
+
+#################################
+#  解凍先フォルダのファイル一覧を取得
+files = os.listdir(unzip_dir)
+csvfiles = [f for f in files if os.path.isfile(os.path.join(unzip_dir, f))]
+
+
+f_out_filename= SUMMARY_OUTFILE + log_type +" " + criteria_month + criteria_year+ ".csv"
+f_out_filefullpath = os.path.join (unzip_dir , f_out_filename)
+f_out = open (f_out_filefullpath,'w')
+# ヘッダーの出力
+f_out.write(f'ホスト名,最大値,最小値,平均値,Warnning超過件数,Critical超過件数\n')
+
+for f in csvfiles:
+    ######
+    # CSVファイルでなければ 次のファイルへ
+    if not (re.search(r'.+_.+_.+\.(csv|CSV)$',f)):
+         continue
+
+
+    # 拡張子CSVのファイル名からホスト名と項目名（CPUやMEMなど）の取得
+    m = re.search(r'(.{5,8})_(.+)_(.+)_(.+)\.(csv|CSV)$',f)
+
+    f=os.path.join(unzip_dir,f)
+    
+    if m :
+        graphtitle= m.group(2)
+        graphtitle = graphtitle.upper()
+        hostname = m.group(3)
+        hostname = hostname.upper()
+        print (f'MATCH {hostname}')
+    
+    #print (f)
+ 
+    #############################################
+    #  ファイル単位の処理
+    x=[]
+    y=[]
+    count_warn=[]
+    count_cri=[]
+            
+ 
+
+    with open(f) as f_in:
+        for li in f_in:
+            #print (li)
+            m = re.search(r'^\w{3} (?P<month>(\w{3})) (?P<day>(\d{2})) (?P<time>(\S{8})) JST (?P<year>(\d{4})),(?P<val>(.+))',li)
+            if (m.group('month')).upper() == criteria_month.upper()  and m.group('year') == criteria_year:
+                
+                # 文字列型の日付を datetime型に直す
+                dtstr = m.group('year') +' '+  m.group('month') +' '+  (m.group('day')) +' '+   (m.group('time')) 
+                dt= datetime.datetime.strptime ( dtstr ,'%Y %b %d %H:%M:%S')
+                x.append(dt)
+                
+                yy = float (m.group('val')) * y_val_mul
+                #print (yy)
+                y.append(yy)
+
+                if yy > y_axi_cri :
+                    count_cri.append([dt,yy])
+                elif yy > y_axi_wrn :
+                    count_warn.append([dt,yy])
+                        
+
+
+
+
+
+    #  最大、最小、平均の計算
+    vmax= ('{:.2f}'. format(max(y))) + x_label_unit
+    vmin= ('{:.2f}'. format(min(y))) + x_label_unit
+    av =sum(y)/len(y)
+    vavg= ('{:.2f}'. format(av)) + x_label_unit
+    
+    # グラフの描画
+    #　グラフのサイズ
+    plt.figure(figsize = [10,5])     
+    plt.clf()
+    plt.cla()
+    plt.plot(x,y,color='#22BB00')
+
+    plt.minorticks_on()
+
+    plt.gca().xaxis.set_major_formatter(pltdates.DateFormatter("%m/%d")) 
+    plt.gca().xaxis.set_major_locator(pltdates.DayLocator(bymonthday=range(1,31)))
+    plt.gca().xaxis.set_minor_locator(pltdates.HourLocator(byhour=range(0,24,8)))
+
+    plt.xticks(rotation=80,fontsize=6)
+    plt.tick_params(bottom =0,left=0,axis='both',labelsize=8)
+    plt.rcParams["font.size"] = 8
+
+    # 余白の調整
+    plt.subplots_adjust(left=0.1, right=0.95, bottom=0.2, top=0.85)
+
+    # X軸、Y軸のラベル描画
+    plt.xlabel('Date')
+    plt.ylabel(y_axis_label)
+
+    #plt.subplot
+
+    # X軸、Y軸の最大値
+    plt.ylim(0,y_axis_max)
+    plt.xlim(min(x)-datetime.timedelta(hours=1),max(x))
+    
+    # 補助線の描画
+    plt.grid(which = "major", axis = "x", color = "black", alpha = 0.5, linestyle = "-", linewidth = 0.4)
+    plt.grid(which = "minor", axis = "x", color = "gray", alpha = 0.7, linestyle = "--", linewidth = 0.2)
+    plt.grid(which = "major", axis = "y", color = "blue", alpha = 0.8, linestyle = "--", linewidth = 0.1)
+    
+    
+    # グラフのタイトルの描画
+    tit=  hostname + "    " + graphtitle +"\n"
+    tit = tit + "    Max:" + vmax  + "    Min:" + vmin + "    Average:" + vavg #+ "    Moniterning Interval :5 minites"
+    plt.title(tit)
+
+
+    # 警告線を描画
+    plt.hlines(y_axi_wrn,min(x),max(x),color='#FF8822',linestyle='dashed',linewidth=0.5 )
+    plt.hlines(y_axi_cri,min(x),max(x),color='red',linestyle='dashed',linewidth=0.5)
+    
+    plt.text(min(x),y_axi_wrn+1,'Warnning',color='#FF8822',fontsize=10)
+    plt.text(min(x),y_axi_cri+1,'Critical',color='red',fontsize=10)
+    
+    # PNG形式でファイルへ出力
+    png_filename=hostname +"_"+ graphtitle +".png"
+    png_file_fullpath = os.path.join(unzip_dir ,png_filename)
+    plt.savefig(png_file_fullpath)
+    
+    # 統計情報をCSVファイルへ出力
+    cnt_w = len(count_warn)
+    cnt_c = len(count_cri)
+    f_out.write(f'{hostname},{vmax},{vmin},{vavg},{cnt_w},{cnt_c}\n')
+
+
+    # 閾値の超過したデータがあった場合
+    if (cnt_w!=0) or (cnt_c!=0) :
+        f_out_over_filename= SUMMARY_OUTFILE + log_type +" " + criteria_month + criteria_year+ "-LimitOver.csv"
+        f_out_over_filefullpath = os.path.join (unzip_dir , f_out_over_filename)
+        f_out_over= open(f_out_over_filefullpath,'a')
+
+        for vl in count_warn:
+            v = ('{:.2f}'. format(vl[1]))
+            dd =vl[0].strftime('%m/%d %H:%M:%S')
+            f_out_over.write (f'{hostname},{dd},{v},Warning\n')
+            #print (f'{hostname},{dd},{v},Warning \n')
+        for vl in count_cri:
+            v = ('{:.2f}'. format(vl[1]))
+            dd =vl[0].strftime('%m/%d %H:%M:%S')
+            f_out_over.write (f'{hostname},{dd},{v},Critical\n')
+            
+        f_out_over.close()
+
+    #print (x)
